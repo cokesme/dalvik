@@ -1504,9 +1504,10 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
     DvmDex* pDvmDex)
 {
     Thread* self = dvmThreadSelf();
-    ClassObject* clazz;
+    ClassObject* clazz; // 类加载的最终形式
     bool profilerNotified = false;
-
+	/* 判断目标类是否有类加载器，对于系统类，虚拟机将从默认的启动路径实现其加载工作
+    对于用户类，虚拟机一般情况下使用默认的类加载器实现类加载工作 */
     if (loader != NULL) {
         LOGVV("#### findClassNoInit(%s,%p,%p)", descriptor, loader,
             pDvmDex->pDexFile);
@@ -1531,8 +1532,9 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
         dvmDumpAllThreads(false);
         dvmAbort();
     }
-
-    clazz = dvmLookupClass(descriptor, loader, true); // 从hash表里查找是否已经有该Class的信息
+	/* 根据目标类的描述符从hash表(系统已加载类)里查找是否已经有该Class的信息，如果已经加载，则返回
+	其ClassObject对象，否则，对目标类进行加载*/
+    clazz = dvmLookupClass(descriptor, loader, true); 
     if (clazz == NULL) {
         const DexClassDef* pClassDef;
 
@@ -1542,15 +1544,17 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
 #if LOG_CLASS_LOADING
         u8 startTime = dvmGetThreadCpuTimeNsec();
 #endif
-		// pDvmDex和loader都为NULL
+		/* 判断是否存在DvmDex结构体对象，如果存在，则表示目标类为一个用户类，将从一个解析的Dex文件
+		中进行加载，对于一个解析过的Dex文件，是一定存在一个DvmDex结构体对象的，故pDvmDex一定不为空
+		若为空，则表示目标类是一个系统类，虚拟机将调用searchBootPathForClass函数从启动路径下查找并
+		加载目标类 */
         if (pDvmDex == NULL) {
             assert(loader == NULL);     /* shouldn't be here otherwise */
-			/*
-			 * 从BOOTCLASSPATH里那一堆jar包文件中，看看哪个jar包声明了目标类
-			 * 返回的是一个打开了的代表odex文件的DvmDex对象
-			 */
+			/* 从BOOTCLASSPATH里那一堆jar包文件中，看看哪个jar包声明了目标类返回的是一个打开了的代
+			表odex文件的DvmDex对象 */
             pDvmDex = searchBootPathForClass(descriptor, &pClassDef);
         } else {
+			// 查找目标类的类定义资源
             pClassDef = dexFindClass(pDvmDex->pDexFile, descriptor);
         }
 
@@ -1566,6 +1570,7 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
         }
 
         /* found a match, try to load it */
+		/* 当获得了加载目标类所需的各项资源，主函数将调用loadClassFromDex函数对目标类进行加载 */
         clazz = loadClassFromDex(pDvmDex, pClassDef, loader);
         if (dvmCheckException(self)) {
             /* class was found but had issues */
@@ -1582,6 +1587,7 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
          * invocation.  (Note all accesses to initThreadId here are
          * guarded by the class object's lock.)
          */
+		/* 将目前使用的类锁住，防止其他进程更改 */
         dvmLockObject(self, (Object*) clazz);
         clazz->initThreadId = self->threadId;
 
@@ -1605,11 +1611,12 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
 
             /* Let the GC free the class.
              */
-            dvmFreeClassInnards(clazz);
+            dvmFreeClassInnards(clazz); // 释放中间变量clazz
             dvmReleaseTrackedAlloc((Object*) clazz, NULL);
 
             /* Grab the winning class.
              */
+			/* 从已加载的类的系统Hash表中重新得到类 */
             clazz = dvmLookupClass(descriptor, loader, true);
             assert(clazz != NULL);
             goto got_class;
@@ -1623,7 +1630,7 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
          * Prepare and resolve.
          */
 		/*
-		 * 对clazz进行一些处理：
+		 * 准备开始连接类，对clazz进行一些处理：
 		 * 1.解析ClassObject对象的基类信息，和它实现了那些接口
 		 * 2.校验：比如父类是final的，那么就不应该有它的派生类等
 		 * 此函数调用成功后，clazz的状态将是CLASS_RESOLVED或CLASS_VERIFIED
@@ -1671,6 +1678,7 @@ static ClassObject* findClassNoInit(const char* descriptor, Object* loader,
          *
          * TODO: these should probably be atomic ops.
          */
+		/* 将类的状态增加到全局变量中去 */
         gDvm.numLoadedClasses++;
         gDvm.numDeclaredMethods +=
             clazz->virtualMethodCount + clazz->directMethodCount;
