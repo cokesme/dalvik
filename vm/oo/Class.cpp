@@ -1776,13 +1776,13 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
     const DexClassDef* pClassDef, const DexClassDataHeader* pHeader,
     const u1* pEncodedData, Object* classLoader)
 {
-    ClassObject* newClass = NULL;
-    const DexFile* pDexFile;
-    const char* descriptor;
+    ClassObject* newClass = NULL; // 目标类的类实例对象
+    const DexFile* pDexFile;      // 用于存储目标Dex文件所对应的DexFile数据结构实例对象
+    const char* descriptor;       // 用于存储目标类的描述符
     int i;
-
+	// 获取相应的类信息
     pDexFile = pDvmDex->pDexFile;
-    descriptor = dexGetClassDescriptor(pDexFile, pClassDef); // 获取类名
+    descriptor = dexGetClassDescriptor(pDexFile, pClassDef);
 
     /*
      * Make sure the aren't any "bonus" flags set, since we use them for
@@ -1806,6 +1806,7 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
      * finalize().
      */
     /* TODO: Can there be fewer special checks in the usual path? */
+	// 为即将生成的类对象实例申请内存空间
     assert(descriptor != NULL);
 	// 判断是不是java.lang.Class类，此类已经初始化过了
     if (classLoader == NULL &&
@@ -1813,28 +1814,24 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
         assert(gDvm.classJavaLangClass != NULL);
         newClass = gDvm.classJavaLangClass;
     } else {
-		// 创建一个ClassObject
+		// 取得对象实例大小并在内存中申请相应内存
         size_t size = classObjectSize(pHeader->staticFieldsSize);
         newClass = (ClassObject*) dvmMalloc(size, ALLOC_NON_MOVING);
     }
     if (newClass == NULL)
         return NULL;
 
-	/*
-	 * 设置ClassObject的一些信息，比如：
-	 * 1.序列号
-	 * 2.类名
-	 * 3.access标志（public、private等）
-	 * 4.classloader
-	 */
+	// 对新的类对象实例进行初始化
     DVM_OBJECT_INIT(newClass, gDvm.classJavaLangClass);
     dvmSetClassSerialNumber(newClass);
     newClass->descriptor = descriptor;
     assert(newClass->descriptorAlloc == NULL);
     SET_CLASS_FLAG(newClass, pClassDef->accessFlags);
+	// 设定字段对象
     dvmSetFieldObject((Object *)newClass,
                       OFFSETOF_MEMBER(ClassObject, classLoader),
                       (Object *)classLoader);
+	// 设定类的相关指针
     newClass->pDvmDex = pDvmDex;
     newClass->primitiveType = PRIM_NOT;
     newClass->status = CLASS_IDX;
@@ -1848,8 +1845,8 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
      * newClass->super is not traversed or freed by dvmFreeClassInnards, so
      * this is safe.
      */
+	// 将这个类的父类的索引加入到类对象的指针区域
     assert(sizeof(u4) == sizeof(ClassObject*)); /* 32-bit check */
-	// newClass的super指向的是代表基类的index，所以dvmLinkClass函数需要解析它
     newClass->super = (ClassObject*) pClassDef->superclassIdx;
 
     /*
@@ -1859,6 +1856,7 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
      * dvmFreeClassInnards, so this is GC-safe.
      */
     const DexTypeList* pInterfacesList;
+	// 得到接口列表
     pInterfacesList = dexGetInterfacesList(pDexFile, pClassDef);
     if (pInterfacesList != NULL) {
         newClass->interfaceCount = pInterfacesList->size;
@@ -1882,29 +1880,31 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
      * because we pass Field pointers around internally. But at least
      * now these Field pointers are in the object heap.
      */
-
+	// 对字段进行加载，首先加载静态字段
     if (pHeader->staticFieldsSize != 0) {
         /* static fields stay on system heap; field data isn't "write once" */
         int count = (int) pHeader->staticFieldsSize;
         u4 lastIndex = 0;
         DexField field;
-
+		// 取得字段数
         newClass->sfieldCount = count;
+		// 逐一加载字段
         for (i = 0; i < count; i++) {
             dexReadClassDataField(&pEncodedData, &field, &lastIndex);
 			// 解析newClass定义的静态成员信息
             loadSFieldFromDex(newClass, &field, &newClass->sfields[i]);
         }
     }
-
+	// 加载实例字段
     if (pHeader->instanceFieldsSize != 0) {
         int count = (int) pHeader->instanceFieldsSize;
         u4 lastIndex = 0;
         DexField field;
-
+		// 取得字段数
         newClass->ifieldCount = count;
         newClass->ifields = (InstField*) dvmLinearAlloc(classLoader,
                 count * sizeof(InstField));
+		// 逐一加载字段
         for (i = 0; i < count; i++) {
             dexReadClassDataField(&pEncodedData, &field, &lastIndex);
             loadIFieldFromDex(newClass, &field, &newClass->ifields[i]);
@@ -1945,15 +1945,16 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
     } else {
         classMapData = NULL;
     }
-
+	// 对类方法进行加载
     if (pHeader->directMethodsSize != 0) {
         int count = (int) pHeader->directMethodsSize;
         u4 lastIndex = 0;
         DexMethod method;
-
+		// 取得方法数目
         newClass->directMethodCount = count;
         newClass->directMethods = (Method*) dvmLinearAlloc(classLoader,
                 count * sizeof(Method));
+		// 逐一加载方法
         for (i = 0; i < count; i++) {
             dexReadClassDataMethod(&pEncodedData, &method, &lastIndex);
             loadMethodFromDex(newClass, &method, &newClass->directMethods[i]);
@@ -1969,15 +1970,16 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
         }
         dvmLinearReadOnly(classLoader, newClass->directMethods);
     }
-
+	// 加载虚方法
     if (pHeader->virtualMethodsSize != 0) {
         int count = (int) pHeader->virtualMethodsSize;
         u4 lastIndex = 0;
         DexMethod method;
-
+		// 取得虚方法数目
         newClass->virtualMethodCount = count;
         newClass->virtualMethods = (Method*) dvmLinearAlloc(classLoader,
                 count * sizeof(Method));
+		// 逐一处理方法
         for (i = 0; i < count; i++) {
             dexReadClassDataMethod(&pEncodedData, &method, &lastIndex);
             loadMethodFromDex(newClass, &method, &newClass->virtualMethods[i]);
@@ -1993,11 +1995,11 @@ static ClassObject* loadClassFromDex0(DvmDex* pDvmDex,
         }
         dvmLinearReadOnly(classLoader, newClass->virtualMethods);
     }
-
+	// 保存源文件信息
     newClass->sourceFile = dexGetSourceFile(pDexFile, pClassDef);
 
     /* caller must call dvmReleaseTrackedAlloc */
-    return newClass;
+    return newClass; // 返回类对象
 }
 
 /*
